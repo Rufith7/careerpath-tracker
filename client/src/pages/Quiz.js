@@ -1,742 +1,462 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// API Base URL
-const API_BASE_URL = 'http://localhost:5001';
-
-// Helper function for fetch requests with timeout
-const fetchWithTimeout = async (url, options = {}, timeout = 10000) => {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-      }
-    });
-    
-    clearTimeout(timeoutId);
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    
-    if (error.name === 'AbortError') {
-      throw new Error('Request timeout. Please check your connection.');
-    }
-    
-    if (error.message.includes('fetch')) {
-      throw new Error('Cannot connect to server. Please make sure the backend is running on port 5001.');
-    }
-    
-    throw error;
-  }
+// ─── Static question bank (no backend needed for fallback) ────────────────────
+const QUESTION_BANK = {
+  JavaScript: [
+    { q: 'Which keyword declares a block-scoped variable?', opts: ['var','let','function','static'], ans: 1 },
+    { q: 'What does === check?', opts: ['Value only','Type only','Value and type','Reference'], ans: 2 },
+    { q: 'What is typeof null?', opts: ['null','undefined','object','number'], ans: 2 },
+    { q: 'Which method adds to end of array?', opts: ['push()','pop()','shift()','unshift()'], ans: 0 },
+    { q: 'What does JSON.parse() do?', opts: ['Object to string','String to object','Delete JSON','Create file'], ans: 1 },
+    { q: 'Which is NOT a JS data type?', opts: ['String','Boolean','Float','Symbol'], ans: 2 },
+    { q: 'What does spread operator (...) do?', opts: ['Deletes array','Expands iterable','Creates loop','Declares var'], ans: 1 },
+    { q: 'What is a closure?', opts: ['A loop','Function accessing outer scope','An error','A data type'], ans: 1 },
+    { q: 'What is Promise used for?', opts: ['Styling','Async operations','Routing','Storage'], ans: 1 },
+    { q: 'Which converts array to string?', opts: ['toString()','join()','Both A and B','stringify()'], ans: 2 },
+  ],
+  React: [
+    { q: 'What is JSX?', opts: ['JavaScript XML','Java Syntax','JSON Extension','JS Extra'], ans: 0 },
+    { q: 'Which hook manages state?', opts: ['useEffect','useState','useContext','useRef'], ans: 1 },
+    { q: 'What is the virtual DOM?', opts: ['Real DOM','Lightweight DOM copy','Server DOM','CSS DOM'], ans: 1 },
+    { q: 'Which hook handles side effects?', opts: ['useState','useCallback','useEffect','useMemo'], ans: 2 },
+    { q: 'What are props?', opts: ['State variables','Data passed to components','CSS styles','Event handlers'], ans: 1 },
+    { q: 'What does key prop do in lists?', opts: ['Styling','Uniquely identifies elements','Adds security','Speeds CSS'], ans: 1 },
+    { q: 'What is React.memo for?', opts: ['Memoize components','Create state','Handle events','Fetch data'], ans: 0 },
+    { q: 'Default React dev server port?', opts: ['8080','3000','5000','4200'], ans: 1 },
+    { q: 'What is context API for?', opts: ['Routing','Global state sharing','Styling','Testing'], ans: 1 },
+    { q: 'How to prevent re-render?', opts: ['useEffect','useState','React.memo','useRef'], ans: 2 },
+  ],
+  Python: [
+    { q: 'Python file extension?', opts: ['.py','.python','.pt','.pyt'], ans: 0 },
+    { q: 'Keyword to define a function?', opts: ['function','def','func','define'], ans: 1 },
+    { q: 'Output of type([])?', opts: ['array','list','tuple','dict'], ans: 1 },
+    { q: 'Exponentiation operator?', opts: ['^','**','exp()','pow'], ans: 1 },
+    { q: 'Which is mutable?', opts: ['Tuple','String','List','Frozenset'], ans: 2 },
+    { q: 'How to create a dictionary?', opts: ['{}','[]','()','<>'], ans: 0 },
+    { q: 'Add element to list?', opts: ['add()','append()','insert()','push()'], ans: 1 },
+    { q: 'len("Python") = ?', opts: ['5','6','7','Error'], ans: 1 },
+    { q: 'Exception handling keyword?', opts: ['try/catch','try/except','catch','handle'], ans: 1 },
+    { q: 'Import a module?', opts: ['include','require','import','use'], ans: 2 },
+  ],
 };
 
-const Quiz = ({ selectedDomain: propDomain, onBack }) => {
-  const [currentStep, setCurrentStep] = useState('selection');
-  const [selectedDomain, setSelectedDomain] = useState(propDomain || 'IT');
-  const [selectedTopic, setSelectedTopic] = useState('');
-  const [selectedLevel, setSelectedLevel] = useState(1);
-  const [selectedDifficulty, setSelectedDifficulty] = useState('Medium');
-  const [quiz, setQuiz] = useState(null);
-  const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState([]);
-  const [timeSpent, setTimeSpent] = useState(0);
-  const [startTime, setStartTime] = useState(null);
-  const [results, setResults] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [topics, setTopics] = useState([]);
-  const [userProgress, setUserProgress] = useState({});
-  const [error, setError] = useState(null);
+const TOPICS = {
+  IT:          ['JavaScript','React','Python','HTML & CSS','Node.js'],
+  DataScience: ['Python','Statistics','Machine Learning','SQL','Data Visualization'],
+  Healthcare:  ['Anatomy','Pharmacology','Patient Care','Medical Ethics','Nutrition'],
+  Finance:     ['Accounting','Investment','Risk Management','Financial Analysis','Economics'],
+  Aptitude:    ['Quantitative','Logical Reasoning','Verbal Ability','Data Interpretation'],
+  Interview:   ['Behavioral Questions','Technical Questions','Communication','Problem Solving'],
+};
 
+// Generate questions locally (no backend needed)
+function generateQuestions(topic, count = 10) {
+  const bank = QUESTION_BANK[topic];
+  if (bank) {
+    const shuffled = [...bank].sort(() => Math.random() - 0.5).slice(0, Math.min(count, bank.length));
+    return shuffled.map((item, i) => ({
+      id: i,
+      question: item.q,
+      options: item.opts,
+      correctIndex: item.ans,
+      explanation: `Correct answer: ${item.opts[item.ans]}`,
+    }));
+  }
+  // Generic fallback for topics without a bank
+  return Array.from({ length: Math.min(count, 5) }, (_, i) => ({
+    id: i,
+    question: `${topic} — Question ${i + 1}: Which of the following is a core concept?`,
+    options: ['Fundamentals', 'Advanced Theory', 'Practical Application', 'All of the above'],
+    correctIndex: 3,
+    explanation: 'All of the above are core concepts.',
+  }));
+}
+
+export default function Quiz({ selectedDomain: propDomain, onBack }) {
+  const [step, setStep]         = useState('setup');   // setup | quiz | results
+  const [domain, setDomain]     = useState(propDomain || 'IT');
+  const [topic, setTopic]       = useState(TOPICS[propDomain || 'IT'][0]);
+  const [level, setLevel]       = useState(1);
+  const [difficulty, setDiff]   = useState('Medium');
+  const [questions, setQs]      = useState([]);
+  const [qIdx, setQIdx]         = useState(0);
+  const [answers, setAnswers]   = useState({});   // { qIdx: selectedOptionIndex }
+  const [results, setResults]   = useState(null);
+  const [elapsed, setElapsed]   = useState(0);
+  const [startTs, setStartTs]   = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [showExpl, setShowExpl] = useState(false); // show explanation after answer
+
+  // Update topic when domain changes
   useEffect(() => {
-    const fetchTopicsAndProgress = async () => {
-      if (selectedDomain) {
-        await fetchTopics();
-        await fetchUserProgress();
-      }
-    };
-    fetchTopicsAndProgress();
-  }, [selectedDomain]); // eslint-disable-line react-hooks/exhaustive-deps
+    setTopic(TOPICS[domain]?.[0] || 'General');
+  }, [domain]);
 
+  // Timer
   useEffect(() => {
-    let interval;
-    if (currentStep === 'quiz' && startTime) {
-      interval = setInterval(() => {
-        setTimeSpent(Math.floor((Date.now() - startTime) / 1000));
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [currentStep, startTime]);
+    if (step !== 'quiz' || !startTs) return;
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startTs) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [step, startTs]);
 
-  const fetchTopics = async () => {
-    try {
-      setError(null);
-      const response = await fetchWithTimeout(`${API_BASE_URL}/api/quiz/topics/${selectedDomain}`, {
-        headers: { 'Content-Type': 'application/json' }
-      });
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.topics) {
-          setTopics(data.topics);
-          if (data.topics.length > 0 && !selectedTopic) setSelectedTopic(data.topics[0]);
-        }
-      } else {
-        throw new Error('Failed to load topics');
-      }
-    } catch (error) {
-      // Fallback topics
-      const fallback = {
-        IT:          ['JavaScript', 'React', 'HTML & CSS', 'Node.js', 'Python'],
-        DataScience: ['Python', 'Statistics', 'Machine Learning', 'SQL'],
-        Healthcare:  ['Anatomy', 'Pharmacology', 'Patient Care', 'Medical Ethics'],
-        Finance:     ['Accounting', 'Investment', 'Risk Management', 'Economics'],
-        Aptitude:    ['Quantitative', 'Logical Reasoning', 'Verbal Ability'],
-        Interview:   ['Behavioral Questions', 'Technical Questions', 'Communication']
-      };
-      const t = fallback[selectedDomain] || ['General'];
-      setTopics(t);
-      if (!selectedTopic) setSelectedTopic(t[0]);
-    }
-  };
-
-  const fetchUserProgress = async () => {
-    try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/api/progress`);
-      if (response.ok) {
-        const data = await response.json();
-        setUserProgress(data || {});
-      }
-    } catch {
-      setUserProgress({});
-    }
-  };
-
-  const generateQuiz = async () => {
+  const startQuiz = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/api/quiz/generate`, {
+      // Try backend first, fall back to local bank
+      const res = await fetch('/api/quiz/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          domain: selectedDomain,
-          topic: selectedTopic,
-          level: selectedLevel,
-          difficulty: selectedDifficulty,
-          questionCount: 10
-        })
+        body: JSON.stringify({ domain, topic, level, difficulty, questionCount: 10 }),
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setQuiz(data.quiz);
-          setCurrentQuestion(0);
-          setAnswers([]);
-          setStartTime(Date.now());
-          setTimeSpent(0);
-          setCurrentStep('quiz');
-        } else {
-          setError(data.message || 'Error generating quiz.');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.quiz?.questions?.length > 0) {
+          // Map backend format to our format
+          const qs = data.quiz.questions.map((q, i) => ({
+            id: i,
+            question: q.question,
+            options: q.options.map(o => o.text),
+            correctIndex: q.correctIndex,
+            explanation: q.explanation,
+          }));
+          setQs(qs);
+          setQIdx(0);
+          setAnswers({});
+          setElapsed(0);
+          setStartTs(Date.now());
+          setShowExpl(false);
+          setStep('quiz');
+          return;
         }
-      } else {
-        setError('Error generating quiz. Please try again.');
       }
-    } catch (error) {
-      setError(error.message || 'Error generating quiz.');
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* fall through to local */ }
+
+    // Local fallback
+    const qs = generateQuestions(topic, 10);
+    setQs(qs);
+    setQIdx(0);
+    setAnswers({});
+    setElapsed(0);
+    setStartTs(Date.now());
+    setShowExpl(false);
+    setStep('quiz');
+    setLoading(false);
+  }, [domain, topic, level, difficulty]);
+
+  // Called when loading finishes after startQuiz sets step
+  useEffect(() => { if (step === 'quiz') setLoading(false); }, [step]);
+
+  const selectAnswer = (optIdx) => {
+    if (answers[qIdx] !== undefined) return; // already answered
+    setAnswers(prev => ({ ...prev, [qIdx]: optIdx }));
+    setShowExpl(true);
   };
 
-  const handleAnswerSelect = (optionIndex) => {
-    console.log(`Answer selected for question ${currentQuestion}: option ${optionIndex}`);
-    const newAnswers = [...answers];
-    const currentTime = Date.now();
-    const questionStartTime = startTime + (timeSpent * 1000);
-    
-    newAnswers[currentQuestion] = {
-      questionId: quiz.questions[currentQuestion]._id,
-      selectedOption: optionIndex,
-      timeSpent: Math.floor((currentTime - questionStartTime) / 1000)
-    };
-    
-    setAnswers(newAnswers);
-    console.log('Updated answers:', newAnswers);
-    
-    // Auto-advance to next question after a short delay (optional)
-    setTimeout(() => {
-      if (currentQuestion < quiz.questions.length - 1) {
-        setCurrentQuestion(currentQuestion + 1);
-      }
-    }, 500);
-  };
-
-  const nextQuestion = () => {
-    console.log(`Moving from question ${currentQuestion} to ${currentQuestion + 1}`);
-    console.log(`Total questions: ${quiz?.questions?.length}`);
-    console.log(`Current answers:`, answers);
-    
-    // Check if current question is answered
-    if (!answers[currentQuestion]) {
-      alert('Please select an answer before proceeding.');
-      return;
-    }
-    
-    if (currentQuestion < quiz.questions.length - 1) {
-      setCurrentQuestion(currentQuestion + 1);
-      console.log(`Advanced to question ${currentQuestion + 1}`);
+  const nextQ = () => {
+    setShowExpl(false);
+    if (qIdx < questions.length - 1) {
+      setQIdx(i => i + 1);
     } else {
-      console.log('Submitting quiz - reached last question');
-      submitQuiz();
+      finishQuiz();
     }
   };
 
-  const previousQuestion = () => {
-    console.log(`Moving from question ${currentQuestion} to ${currentQuestion - 1}`);
-    if (currentQuestion > 0) {
-      setCurrentQuestion(currentQuestion - 1);
-      console.log(`Moved back to question ${currentQuestion - 1}`);
-    }
-  };
+  const finishQuiz = async () => {
+    const answerArray = questions.map((q, i) => ({
+      selectedOption: answers[i] ?? -1,
+      correctIndex: q.correctIndex,
+    }));
 
-  const submitQuiz = async () => {
-    setLoading(true);
-    setError(null);
+    let correct = answerArray.filter(a => a.selectedOption === a.correctIndex).length;
+    let score = Math.round((correct / questions.length) * 100);
+    let passed = score >= 70;
+
+    // Try to submit to backend for server-side scoring
     try {
-      const response = await fetchWithTimeout(`${API_BASE_URL}/api/quiz/submit`, {
+      const res = await fetch('/api/quiz/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers, domain: selectedDomain, level: selectedLevel })
+        body: JSON.stringify({ answers: answerArray }),
       });
-
-      if (response.ok) {
-        const data = await response.json();
+      if (res.ok) {
+        const data = await res.json();
         if (data.success) {
-          setResults(data.result);
-          setCurrentStep('results');
-          fetchUserProgress();
-        } else {
-          setError(data.message || 'Error submitting quiz.');
+          score = data.result.score;
+          correct = data.result.correctAnswers;
+          passed = data.result.passed;
         }
-      } else {
-        setError('Error submitting quiz. Please try again.');
       }
-    } catch (error) {
-      setError(error.message || 'Error submitting quiz.');
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* use local score */ }
+
+    setResults({ score, correct, total: questions.length, passed, timeSpent: elapsed });
+    setStep('results');
   };
 
-  const resetQuiz = () => {
-    setCurrentStep('selection');
-    setQuiz(null);
-    setCurrentQuestion(0);
-    setAnswers([]);
+  const reset = () => {
+    setStep('setup');
+    setQs([]);
+    setQIdx(0);
+    setAnswers({});
     setResults(null);
-    setTimeSpent(0);
-    setStartTime(null);
+    setElapsed(0);
+    setStartTs(null);
+    setShowExpl(false);
   };
 
-  const styles = {
-    container: {
-      minHeight: '100vh',
-      padding: '2rem',
-      background: 'linear-gradient(135deg, #0d9488 0%, #14b8a6 50%, #06b6d4 100%)',
-      animation: 'gradientShift 15s ease infinite',
-      backgroundSize: '200% 200%'
-    },
-    card: {
-      background: 'rgba(255, 255, 255, 0.1)',
-      backdropFilter: 'blur(10px)',
-      borderRadius: '1rem',
-      padding: '2rem',
-      border: '1px solid rgba(255, 255, 255, 0.2)',
-      maxWidth: '800px',
-      margin: '0 auto'
-    },
-    title: {
-      color: 'white',
-      fontSize: '2.5rem',
-      fontWeight: 'bold',
-      textAlign: 'center',
-      marginBottom: '2rem'
-    },
-    subtitle: {
-      color: 'rgba(255, 255, 255, 0.8)',
-      fontSize: '1.2rem',
-      textAlign: 'center',
-      marginBottom: '2rem'
-    },
-    formGroup: {
-      marginBottom: '1.5rem'
-    },
-    label: {
-      color: 'white',
-      fontSize: '1rem',
-      fontWeight: '600',
-      marginBottom: '0.5rem',
-      display: 'block'
-    },
-    select: {
-      width: '100%',
-      padding: '0.75rem',
-      borderRadius: '0.5rem',
-      border: '1px solid rgba(255, 255, 255, 0.3)',
-      background: 'rgba(255, 255, 255, 0.1)',
-      color: 'white',
-      fontSize: '1rem'
-    },
-    button: {
-      background: 'linear-gradient(135deg, #14b8a6, #22c55e)',
-      color: 'white',
-      padding: '0.75rem 2rem',
-      borderRadius: '0.5rem',
-      border: 'none',
-      fontSize: '1rem',
-      fontWeight: '600',
-      cursor: 'pointer',
-      transition: 'transform 0.2s',
-      margin: '0.5rem'
-    },
-    buttonSecondary: {
-      background: 'rgba(255, 255, 255, 0.2)',
-      color: 'white',
-      padding: '0.75rem 2rem',
-      borderRadius: '0.5rem',
-      border: '1px solid rgba(255, 255, 255, 0.3)',
-      fontSize: '1rem',
-      fontWeight: '600',
-      cursor: 'pointer',
-      transition: 'transform 0.2s',
-      margin: '0.5rem'
-    },
-    questionCard: {
-      background: 'rgba(255, 255, 255, 0.1)',
-      borderRadius: '1rem',
-      padding: '2rem',
-      marginBottom: '2rem'
-    },
-    questionText: {
-      color: 'white',
-      fontSize: '1.3rem',
-      fontWeight: '600',
-      marginBottom: '1.5rem',
-      lineHeight: '1.6'
-    },
-    option: {
-      background: 'rgba(255, 255, 255, 0.1)',
-      border: '1px solid rgba(255, 255, 255, 0.2)',
-      borderRadius: '0.5rem',
-      padding: '1rem',
-      margin: '0.5rem 0',
-      color: 'white',
-      cursor: 'pointer',
-      transition: 'all 0.3s ease'
-    },
-    optionSelected: {
-      background: 'rgba(20, 184, 166, 0.3)',
-      border: '2px solid #14b8a6'
-    },
-    progressBar: {
-      background: 'rgba(255, 255, 255, 0.2)',
-      borderRadius: '1rem',
-      height: '0.5rem',
-      marginBottom: '2rem',
-      overflow: 'hidden'
-    },
-    progressFill: {
-      background: 'linear-gradient(135deg, #14b8a6, #22c55e)',
-      height: '100%',
-      borderRadius: '1rem',
-      transition: 'width 0.3s ease'
-    },
-    timer: {
-      color: 'white',
-      fontSize: '1.1rem',
-      fontWeight: '600',
-      textAlign: 'center',
-      marginBottom: '1rem'
-    },
-    resultsCard: {
-      textAlign: 'center'
-    },
-    scoreCircle: {
-      width: '150px',
-      height: '150px',
-      borderRadius: '50%',
-      background: 'conic-gradient(from 0deg, #22c55e 0%, #22c55e var(--percentage), rgba(255,255,255,0.2) var(--percentage))',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      margin: '2rem auto',
-      fontSize: '2rem',
-      fontWeight: 'bold',
-      color: 'white'
-    },
-    feedback: {
-      background: 'rgba(255, 255, 255, 0.1)',
-      borderRadius: '0.5rem',
-      padding: '1rem',
-      margin: '1rem 0',
-      textAlign: 'left'
-    },
-    levelIndicator: {
-      display: 'inline-block',
-      background: 'rgba(34, 197, 94, 0.2)',
-      border: '1px solid rgba(34, 197, 94, 0.3)',
-      color: '#86efac',
-      padding: '0.25rem 0.5rem',
-      borderRadius: '0.25rem',
-      fontSize: '0.8rem',
-      margin: '0.25rem'
-    }
+  // ── Styles ──────────────────────────────────────────────────────────────────
+  const card = {
+    background: 'rgba(255,255,255,0.13)',
+    backdropFilter: 'blur(18px)',
+    borderRadius: '1.5rem',
+    padding: '2rem',
+    border: '1px solid rgba(255,255,255,0.25)',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+    maxWidth: '780px',
+    margin: '0 auto',
+  };
+  const btnPrimary = {
+    background: 'linear-gradient(135deg,#14b8a6,#22c55e)',
+    color: '#fff', padding: '0.85rem 2rem', borderRadius: '0.75rem',
+    border: 'none', fontSize: '1rem', fontWeight: 700, cursor: 'pointer',
+  };
+  const btnGhost = {
+    background: 'rgba(255,255,255,0.12)', color: '#fff',
+    padding: '0.85rem 2rem', borderRadius: '0.75rem',
+    border: '2px solid rgba(255,255,255,0.3)', fontSize: '1rem',
+    fontWeight: 600, cursor: 'pointer',
+  };
+  const selectStyle = {
+    width: '100%', padding: '0.75rem 1rem', borderRadius: '0.75rem',
+    border: '2px solid rgba(255,255,255,0.3)',
+    background: 'rgba(255,255,255,0.12)', color: '#fff',
+    fontSize: '1rem', outline: 'none', boxSizing: 'border-box',
+    marginBottom: '1.25rem',
+  };
+  const labelStyle = {
+    display: 'block', color: '#fff', fontWeight: 600,
+    marginBottom: '0.4rem', fontSize: '0.95rem',
   };
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const getAvailableLevels = () => {
-    const domainProgress = userProgress[selectedDomain];
-    if (!domainProgress) return [1];
-    return domainProgress.unlockedLevels || [1];
-  };
+  const currentQ = questions[qIdx];
+  const answered = answers[qIdx] !== undefined;
+  const answeredCount = Object.keys(answers).length;
 
   return (
-    <div style={styles.container}>
-      {onBack && (
-        <button
-          onClick={onBack}
-          style={{
-            background: 'rgba(255, 255, 255, 0.1)',
-            color: 'white',
-            padding: '0.75rem 1.5rem',
-            borderRadius: '0.5rem',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            cursor: 'pointer',
-            fontSize: '1rem',
-            fontWeight: '600',
-            marginBottom: '1.5rem',
-            marginLeft: '2rem',
-            marginTop: '2rem'
-          }}
-        >
-          ← Back to Roadmap
-        </button>
-      )}
-      <div style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.35 }}
+    >
       <AnimatePresence mode="wait">
-        {currentStep === 'selection' && (
-          <motion.div
-            key="selection"
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -30 }}
-            transition={{ duration: 0.5 }}
-            style={styles.card}
+
+        {/* ══════════════ SETUP ══════════════ */}
+        {step === 'setup' && (
+          <motion.div key="setup"
+            initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }} style={card}
           >
-            <h1 style={styles.title}>🧠 AI Quiz Engine</h1>
-            <p style={styles.subtitle}>
-              Test your knowledge with AI-generated quizzes. Pass with 70% to unlock the next level!
+            <h1 style={{ color: '#fff', fontSize: '2rem', fontWeight: 800, textAlign: 'center', margin: '0 0 0.4rem' }}>
+              🧠 AI Quiz Engine
+            </h1>
+            <p style={{ color: 'rgba(255,255,255,0.75)', textAlign: 'center', marginBottom: '2rem' }}>
+              Score 70% or above to pass and unlock the next level!
             </p>
 
-            {error && (
-              <div style={{
-                background: 'rgba(239, 68, 68, 0.2)',
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-                borderRadius: '0.5rem',
-                padding: '1rem',
-                margin: '1rem 0',
-                color: '#fca5a5',
-                textAlign: 'center'
-              }}>
-                {error}
-              </div>
-            )}
+            <label style={labelStyle}>Domain</label>
+            <select style={selectStyle} value={domain} onChange={e => setDomain(e.target.value)}>
+              <option value="IT">Information Technology</option>
+              <option value="DataScience">Data Science</option>
+              <option value="Healthcare">Healthcare</option>
+              <option value="Finance">Finance</option>
+              <option value="Aptitude">Aptitude & Reasoning</option>
+              <option value="Interview">Interview Preparation</option>
+            </select>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Select Domain:</label>
-              <select
-                value={selectedDomain}
-                onChange={(e) => setSelectedDomain(e.target.value)}
-                style={styles.select}
-              >
-                <option value="IT">Information Technology</option>
-                <option value="DataScience">Data Science</option>
-                <option value="Healthcare">Healthcare</option>
-                <option value="Finance">Finance</option>
-                <option value="Aptitude">Aptitude & Reasoning</option>
-                <option value="Interview">Interview Preparation</option>
-              </select>
-            </div>
+            <label style={labelStyle}>Topic</label>
+            <select style={selectStyle} value={topic} onChange={e => setTopic(e.target.value)}>
+              {(TOPICS[domain] || []).map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Select Topic:</label>
-              <select
-                value={selectedTopic}
-                onChange={(e) => setSelectedTopic(e.target.value)}
-                style={styles.select}
-              >
-                {topics && topics.length > 0 ? (
-                  topics.map(topic => (
-                    <option key={topic} value={topic}>{topic}</option>
-                  ))
-                ) : (
-                  <option value="">Loading topics...</option>
-                )}
-              </select>
-            </div>
+            <label style={labelStyle}>Level</label>
+            <select style={selectStyle} value={level} onChange={e => setLevel(Number(e.target.value))}>
+              {[1,2,3,4,5].map(l => <option key={l} value={l}>Level {l}</option>)}
+            </select>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Select Level:</label>
-              <select
-                value={selectedLevel}
-                onChange={(e) => setSelectedLevel(parseInt(e.target.value))}
-                style={styles.select}
-              >
-                {getAvailableLevels().map(level => (
-                  <option key={level} value={level}>Level {level}</option>
-                ))}
-              </select>
-              <div style={{ marginTop: '0.5rem' }}>
-                {[1, 2, 3, 4, 5].map(level => (
-                  <span
-                    key={level}
-                    style={{
-                      ...styles.levelIndicator,
-                      background: getAvailableLevels().includes(level) 
-                        ? 'rgba(34, 197, 94, 0.2)' 
-                        : 'rgba(156, 163, 175, 0.2)',
-                      color: getAvailableLevels().includes(level) 
-                        ? '#86efac' 
-                        : '#9ca3af'
-                    }}
-                  >
-                    Level {level} {getAvailableLevels().includes(level) ? '🔓' : '🔒'}
-                  </span>
-                ))}
-              </div>
-            </div>
+            <label style={labelStyle}>Difficulty</label>
+            <select style={{ ...selectStyle, marginBottom: '2rem' }} value={difficulty} onChange={e => setDiff(e.target.value)}>
+              <option value="Easy">Easy</option>
+              <option value="Medium">Medium</option>
+              <option value="Hard">Hard</option>
+            </select>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Select Difficulty:</label>
-              <select
-                value={selectedDifficulty}
-                onChange={(e) => setSelectedDifficulty(e.target.value)}
-                style={styles.select}
-              >
-                <option value="Easy">Easy</option>
-                <option value="Medium">Medium</option>
-                <option value="Hard">Hard</option>
-              </select>
-            </div>
-
-            <div style={{ textAlign: 'center', marginTop: '2rem' }}>
-              <button
-                onClick={generateQuiz}
-                disabled={loading || !selectedTopic}
-                style={styles.button}
-              >
-                {loading ? 'Generating Quiz...' : 'Start Quiz 🚀'}
+            <div style={{ textAlign: 'center' }}>
+              <button style={{ ...btnPrimary, opacity: loading ? 0.6 : 1, fontSize: '1.1rem', padding: '1rem 3rem' }}
+                onClick={startQuiz} disabled={loading}>
+                {loading ? '⏳ Loading…' : '🚀 Start Quiz'}
               </button>
             </div>
           </motion.div>
         )}
 
-        {currentStep === 'quiz' && quiz && (
-          <motion.div
-            key="quiz"
-            initial={{ opacity: 0, x: 100 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -100 }}
-            transition={{ duration: 0.5 }}
-            style={styles.card}
+        {/* ══════════════ QUIZ ══════════════ */}
+        {step === 'quiz' && currentQ && (
+          <motion.div key={`q-${qIdx}`}
+            initial={{ opacity: 0, x: 50 }} animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -50 }} transition={{ duration: 0.3 }}
+            style={card}
           >
-            <div style={styles.timer}>
-              ⏱️ Time: {formatTime(timeSpent)} | Question {currentQuestion + 1} of {quiz.questions.length}
+            {/* Header row */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.9rem', fontWeight: 600 }}>
+                Question {qIdx + 1} / {questions.length}
+              </span>
+              <span style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.9rem' }}>⏱️ {fmt(elapsed)}</span>
             </div>
 
-            <div style={styles.progressBar}>
-              <div
-                style={{
-                  ...styles.progressFill,
-                  width: `${((currentQuestion + 1) / quiz.questions.length) * 100}%`
-                }}
+            {/* Progress bar */}
+            <div style={{ background: 'rgba(255,255,255,0.18)', borderRadius: '50px', height: '8px', marginBottom: '1.75rem', overflow: 'hidden' }}>
+              <motion.div
+                style={{ background: 'linear-gradient(90deg,#14b8a6,#22c55e)', height: '100%', borderRadius: '50px' }}
+                animate={{ width: `${((qIdx + 1) / questions.length) * 100}%` }}
+                transition={{ duration: 0.4 }}
               />
             </div>
 
-            <div style={styles.questionCard}>
-              <div style={styles.questionText}>
-                {quiz.questions[currentQuestion].question}
-              </div>
-
-              {quiz.questions[currentQuestion].options.map((option, index) => (
-                <div
-                  key={index}
-                  onClick={() => handleAnswerSelect(index)}
-                  style={{
-                    ...styles.option,
-                    ...(answers[currentQuestion]?.selectedOption === index ? styles.optionSelected : {})
-                  }}
-                >
-                  {String.fromCharCode(65 + index)}. {option.text}
-                </div>
-              ))}
+            {/* Question */}
+            <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '1rem', padding: '1.5rem', marginBottom: '1.5rem' }}>
+              <p style={{ color: '#fff', fontSize: '1.15rem', fontWeight: 600, lineHeight: 1.65, margin: 0 }}>
+                {currentQ.question}
+              </p>
             </div>
 
-            <div style={{ textAlign: 'center' }}>
-              {currentQuestion > 0 && (
-                <button onClick={previousQuestion} style={styles.buttonSecondary}>
-                  ← Previous
+            {/* Options */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {currentQ.options.map((opt, i) => {
+                const isSelected = answers[qIdx] === i;
+                const isCorrect  = i === currentQ.correctIndex;
+                let bg = 'rgba(255,255,255,0.08)';
+                let border = '2px solid rgba(255,255,255,0.2)';
+                if (answered) {
+                  if (isCorrect)       { bg = 'rgba(34,197,94,0.25)';  border = '2px solid #22c55e'; }
+                  else if (isSelected) { bg = 'rgba(239,68,68,0.25)';  border = '2px solid #ef4444'; }
+                } else if (isSelected) {
+                  bg = 'rgba(20,184,166,0.25)'; border = '2px solid #14b8a6';
+                }
+
+                return (
+                  <motion.div key={i}
+                    onClick={() => selectAnswer(i)}
+                    whileHover={!answered ? { scale: 1.02 } : {}}
+                    whileTap={!answered ? { scale: 0.98 } : {}}
+                    style={{ padding: '1rem 1.25rem', borderRadius: '0.75rem', border, background: bg, color: '#fff', cursor: answered ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.85rem', transition: 'background 0.2s, border 0.2s' }}
+                  >
+                    <span style={{ width: '30px', height: '30px', borderRadius: '50%', background: answered && isCorrect ? '#22c55e' : answered && isSelected ? '#ef4444' : 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.85rem', flexShrink: 0 }}>
+                      {answered && isCorrect ? '✓' : answered && isSelected ? '✗' : String.fromCharCode(65 + i)}
+                    </span>
+                    <span style={{ fontSize: '0.97rem', lineHeight: 1.4 }}>{opt}</span>
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Explanation */}
+            <AnimatePresence>
+              {showExpl && answered && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                  style={{ background: 'rgba(255,255,255,0.1)', borderRadius: '0.75rem', padding: '1rem', marginBottom: '1.25rem', borderLeft: '4px solid #14b8a6' }}
+                >
+                  <p style={{ color: '#a7f3d0', fontWeight: 700, margin: '0 0 0.25rem', fontSize: '0.9rem' }}>💡 Explanation</p>
+                  <p style={{ color: 'rgba(255,255,255,0.85)', margin: 0, fontSize: '0.92rem' }}>{currentQ.explanation}</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Navigation */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button style={{ ...btnGhost, opacity: qIdx === 0 ? 0.4 : 1 }}
+                onClick={() => { if (qIdx > 0) { setQIdx(i => i - 1); setShowExpl(answers[qIdx - 1] !== undefined); } }}
+                disabled={qIdx === 0}>
+                ← Back
+              </button>
+
+              {answered && (
+                <button style={btnPrimary} onClick={nextQ}>
+                  {qIdx === questions.length - 1 ? '✅ Submit Quiz' : 'Next →'}
                 </button>
               )}
-              
-              <button
-                onClick={nextQuestion}
-                disabled={!answers[currentQuestion]}
-                style={{
-                  ...styles.button,
-                  opacity: answers[currentQuestion] ? 1 : 0.5
-                }}
-              >
-                {currentQuestion === quiz.questions.length - 1 ? 'Submit Quiz' : 'Next →'}
-              </button>
             </div>
+
+            {/* Answered count */}
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', textAlign: 'center', marginTop: '1rem' }}>
+              {answeredCount} / {questions.length} answered
+            </p>
           </motion.div>
         )}
 
-        {currentStep === 'results' && results && (
-          <motion.div
-            key="results"
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            transition={{ duration: 0.5 }}
-            style={{ ...styles.card, ...styles.resultsCard }}
+        {/* ══════════════ RESULTS ══════════════ */}
+        {step === 'results' && results && (
+          <motion.div key="results"
+            initial={{ opacity: 0, scale: 0.88 }} animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }} style={{ ...card, textAlign: 'center' }}
           >
-            <h2 style={styles.title}>Quiz Results</h2>
+            <h2 style={{ color: '#fff', fontSize: '2rem', fontWeight: 800, margin: '0 0 1.5rem' }}>
+              {results.passed ? '🎉 Quiz Passed!' : '📚 Quiz Complete'}
+            </h2>
 
-            <div
-              style={{
-                ...styles.scoreCircle,
-                '--percentage': `${(results.score / 100) * 360}deg`
-              }}
-            >
-              {results.score}%
+            {/* Score circle */}
+            <div style={{ width: '150px', height: '150px', borderRadius: '50%', background: results.passed ? 'linear-gradient(135deg,#14b8a6,#22c55e)' : 'linear-gradient(135deg,#f97316,#ef4444)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.75rem', boxShadow: '0 8px 32px rgba(0,0,0,0.3)' }}>
+              <span style={{ color: '#fff', fontSize: '2.4rem', fontWeight: 900 }}>{results.score}%</span>
             </div>
 
-            <div style={{ color: 'white', fontSize: '1.2rem', marginBottom: '2rem' }}>
-              <div>✅ Correct: {results.correctAnswers}/{results.totalQuestions}</div>
-              <div>⏱️ Time: {formatTime(results.timeSpent)}</div>
-              <div>
-                {results.passed ? (
-                  <span style={{ color: '#22c55e' }}>🎉 Passed!</span>
-                ) : (
-                  <span style={{ color: '#ef4444' }}>❌ Failed</span>
-                )}
+            {/* Stats */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', flexWrap: 'wrap', marginBottom: '1.75rem' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ color: '#a7f3d0', fontSize: '1.5rem', fontWeight: 800 }}>{results.correct}/{results.total}</div>
+                <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.85rem' }}>Correct</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ color: '#a7f3d0', fontSize: '1.5rem', fontWeight: 800 }}>{fmt(results.timeSpent)}</div>
+                <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.85rem' }}>Time</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ color: results.passed ? '#86efac' : '#fca5a5', fontSize: '1.5rem', fontWeight: 800 }}>
+                  {results.passed ? 'PASS' : 'FAIL'}
+                </div>
+                <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.85rem' }}>Result</div>
               </div>
             </div>
 
-            {results.nextLevelUnlocked && (
-              <div style={{
-                ...styles.feedback,
-                background: 'rgba(34, 197, 94, 0.2)',
-                border: '1px solid rgba(34, 197, 94, 0.3)'
-              }}>
-                <div style={{ color: '#86efac', fontWeight: 'bold' }}>
-                  🔓 Level {selectedLevel + 1} Unlocked!
-                </div>
-                <div style={{ color: 'white' }}>
-                  Excellent work! You can now access the next level.
-                </div>
+            {/* Pass / Fail message */}
+            {results.passed ? (
+              <div style={{ background: 'rgba(34,197,94,0.18)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: '1rem', padding: '1rem 1.5rem', marginBottom: '1.75rem' }}>
+                <p style={{ color: '#86efac', fontWeight: 700, margin: '0 0 0.25rem' }}>🔓 Level {level + 1} Unlocked!</p>
+                <p style={{ color: 'rgba(255,255,255,0.8)', margin: 0, fontSize: '0.92rem' }}>Great work! You can now attempt the next level.</p>
+              </div>
+            ) : (
+              <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: '1rem', padding: '1rem 1.5rem', marginBottom: '1.75rem' }}>
+                <p style={{ color: '#fca5a5', fontWeight: 700, margin: '0 0 0.25rem' }}>You need 70% to pass.</p>
+                <p style={{ color: 'rgba(255,255,255,0.75)', margin: 0, fontSize: '0.92rem' }}>Review the topic and try again — you've got this!</p>
               </div>
             )}
 
-            {results.feedback && (
-              <div style={styles.feedback}>
-                <div style={{ color: 'white', fontWeight: 'bold', marginBottom: '1rem' }}>
-                  📝 Feedback:
-                </div>
-                {results.feedback.strengths?.map((strength, index) => (
-                  <div key={index} style={{ color: '#86efac', marginBottom: '0.5rem' }}>
-                    ✅ {strength}
-                  </div>
-                ))}
-                {results.feedback.weaknesses?.map((weakness, index) => (
-                  <div key={index} style={{ color: '#fca5a5', marginBottom: '0.5rem' }}>
-                    ⚠️ {weakness}
-                  </div>
-                ))}
-                {results.feedback.recommendations?.map((rec, index) => (
-                  <div key={index} style={{ color: '#93c5fd', marginBottom: '0.5rem' }}>
-                    💡 {rec}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ marginTop: '2rem' }}>
-              <button onClick={resetQuiz} style={styles.button}>
-                Take Another Quiz
-              </button>
-              
-              {results.nextLevelUnlocked && (
-                <button
-                  onClick={() => {
-                    setSelectedLevel(selectedLevel + 1);
-                    resetQuiz();
-                  }}
-                  style={styles.button}
-                >
-                  Try Level {selectedLevel + 1} 🚀
+            {/* Buttons */}
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button style={btnPrimary} onClick={reset}>Try Another Quiz</button>
+              {results.passed && (
+                <button style={btnGhost} onClick={() => { setLevel(l => l + 1); reset(); }}>
+                  Level {level + 1} →
                 </button>
               )}
             </div>
           </motion.div>
         )}
+
       </AnimatePresence>
-      </div>
-
-      {loading && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000
-          }}
-        >
-          <div style={{
-            background: 'white',
-            borderRadius: '1rem',
-            padding: '2rem',
-            textAlign: 'center'
-          }}>
-            <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🧠</div>
-            <div>AI is generating your quiz...</div>
-          </div>
-        </motion.div>
-      )}
-    </div>
+    </motion.div>
   );
-};
-
-export default Quiz;
+}

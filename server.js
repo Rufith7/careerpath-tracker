@@ -211,6 +211,7 @@ app.post('/api/quiz/generate', (req, res) => {
       questions: questions.map(q => ({
         _id: q._id,
         question: q.question,
+        correctIndex: q.correctIndex,
         options: q.options.map((o, i) => ({ text: o.text, index: i })),
         explanation: q.explanation
       }))
@@ -221,10 +222,9 @@ app.post('/api/quiz/generate', (req, res) => {
 // QUIZ SUBMIT - no auth required
 app.post('/api/quiz/submit', (req, res) => {
   const { answers } = req.body;
-  if (!answers || !Array.isArray(answers))
+  if (!answers || !Array.isArray(answers) || answers.length === 0)
     return res.status(400).json({ message: 'Invalid submission' });
 
-  // Score based on answers array - each answer has selectedOption and correctIndex
   let correct = 0;
   answers.forEach(a => {
     if (a.selectedOption === a.correctIndex) correct++;
@@ -232,18 +232,6 @@ app.post('/api/quiz/submit', (req, res) => {
 
   const score = Math.round((correct / answers.length) * 100);
   const passed = score >= 70;
-
-  if (passed) {
-    const idx = users.findIndex(u => u.id === req.userId);
-    if (idx !== -1) {
-      const dom = domain;
-      if (!users[idx].progress[dom]) users[idx].progress[dom] = { currentLevel: 1, unlockedLevels: [1] };
-      const nextLevel = parseInt(level) + 1;
-      if (!users[idx].progress[dom].unlockedLevels.includes(nextLevel))
-        users[idx].progress[dom].unlockedLevels.push(nextLevel);
-      users[idx].progress[dom].currentLevel = Math.max(nextLevel, users[idx].progress[dom].currentLevel);
-    }
-  }
 
   res.json({
     success: true,
